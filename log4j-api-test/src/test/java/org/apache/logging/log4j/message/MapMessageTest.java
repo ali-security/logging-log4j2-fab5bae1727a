@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Date;
 import java.sql.Time;
 import java.util.Arrays;
@@ -29,9 +30,12 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.DoubleAdder;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.util.StringBuilderFormattable;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  *
@@ -169,6 +173,51 @@ class MapMessageTest {
                         + "}}")
                 .replace('\'', '"');
         assertEquals(expectedJson, actualJson);
+    }
+
+    @ParameterizedTest
+    @ValueSource(doubles = {Double.NEGATIVE_INFINITY, Double.NaN, Double.POSITIVE_INFINITY})
+    void testJsonFormatterDoubleNonFiniteSupport(final double number) {
+        final String expectedJson = String.format("{'number':'%s','numbers':['%s']}", number, number)
+                .replace('\'', '"');
+        final String actualJson = new ObjectMapMessage()
+                .with("number", number)
+                .with("numbers", new double[] {number})
+                .getFormattedMessage(new String[] {"JSON"});
+        assertEquals(expectedJson, actualJson);
+    }
+
+    @ParameterizedTest
+    @ValueSource(floats = {Float.NEGATIVE_INFINITY, Float.NaN, Float.POSITIVE_INFINITY})
+    void testJsonFormatterFloatNonFiniteSupport(final float number) {
+        final String expectedJson = String.format("{'number':'%s','numbers':['%s']}", number, number)
+                .replace('\'', '"');
+        final String actualJson = new ObjectMapMessage()
+                .with("number", number)
+                .with("numbers", new float[] {number})
+                .getFormattedMessage(new String[] {"JSON"});
+        assertEquals(expectedJson, actualJson);
+    }
+
+    @Test
+    void testJsonFormatterOtherNumberNonFiniteSupport() {
+        // `BigInteger` exceeding the `double` range yields an infinite `doubleValue()`
+        final BigInteger hugeNumber = BigInteger.TEN.pow(400);
+        assertEquals(
+                "{'number':'Infinity'}".replace('\'', '"'),
+                new ObjectMapMessage().with("number", hugeNumber).getFormattedMessage(new String[] {"JSON"}));
+        // Other `Number` implementations can yield a `NaN` `doubleValue()`
+        final DoubleAdder nanNumber = new DoubleAdder();
+        nanNumber.add(Double.NaN);
+        assertEquals(
+                "{'number':'NaN'}".replace('\'', '"'),
+                new ObjectMapMessage().with("number", nanNumber).getFormattedMessage(new String[] {"JSON"}));
+        // Non-finite values nested in collections must be quoted as well
+        assertEquals(
+                "{'numbers':['-Infinity','NaN','Infinity']}".replace('\'', '"'),
+                new ObjectMapMessage()
+                        .with("numbers", Arrays.asList(Double.NEGATIVE_INFINITY, Float.NaN, Double.POSITIVE_INFINITY))
+                        .getFormattedMessage(new String[] {"JSON"}));
     }
 
     @Test
