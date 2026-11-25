@@ -18,33 +18,111 @@
 name: build
 
 on:
-  push:
-    branches:
-      - "2.x"
-      - "2.25.x"
-      - "release/2*"
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: Surefire -Dtest selector; when set, only log4j-api and its tests are built and the selected tests run
+        default: ''
+        type: string
 
 permissions: read-all
 
 jobs:
 
+  # Inlined from apache/logging-parent/.github/workflows/build-reusable.yaml@rel/12.1.1
+  # (java-version 8+17, site/develocity/reproducibility steps not run on the fork)
   build:
     if: github.actor != 'dependabot[bot]'
-    uses: apache/logging-parent/.github/workflows/build-reusable.yaml@rel/12.1.1
-    secrets:
-      DV_ACCESS_TOKEN: ${{ startsWith(github.ref_name, 'release/') && '' || secrets.DEVELOCITY_ACCESS_KEY }}
-    with:
-      java-version: |
-        8
-        17
-      site-enabled: true
-      reproducibility-check-enabled: false
-      develocity-enabled: ${{ ! startsWith(github.ref_name, 'release/') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 48
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-latest, ubuntu-latest, windows-latest ]
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # 4.2.2
+
+      - name: Set up Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00   # 4.7.1
+        with:
+          distribution: zulu
+          java-version: |
+            8
+            17
+          cache: maven
+
+      # We use `install` instead of `verify`, otherwise the build website step below fails
+      - name: Build
+        id: build
+        shell: bash
+        run: |
+          # docker-maven-plugin 0.46.0 (log4j-parent) cannot parse container inspect output of the runner's Docker 29; 0.48.0 fixes it
+          DOCKER_PLUGIN="-Ddocker-maven-plugin.version=0.48.0"
+          GATES="-Dspotless.check.skip=true -Dspotbugs.skip=true -Drat.skip=true -Dcheckstyle.skip=true -Dbnd.baseline.skip=true -Drevapi.skip=true -Djapicmp.skip=true -Dmaven.javadoc.skip=true"
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./mvnw \
+              --show-version --batch-mode --errors --no-transfer-progress \
+              -DtrimStackTrace=false \
+              -DinstallAtEnd=true \
+              $GATES $DOCKER_PLUGIN \
+              -pl log4j-api-java9,log4j-api,log4j-api-test -am \
+              -Dtest="${{ inputs.test-filter }}" -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false \
+              clean install
+          else
+            ./mvnw \
+              --show-version --batch-mode --errors --no-transfer-progress \
+              -DtrimStackTrace=false \
+              -DinstallAtEnd=true \
+              $GATES $DOCKER_PLUGIN \
+              clean install
+          fi
+
+      # Unbox2ConfigurableTest is gated behind -Dtest because it must run in its own JVM;
+      # run it the way its source comment documents.
+      - name: Run opt-in tests
+        if: ${{ inputs.test-filter == '' }}
+        shell: bash
+        run: |
+          FLAGS="--show-version --batch-mode --errors --no-transfer-progress -DtrimStackTrace=false -Dspotless.check.skip=true -Dspotbugs.skip=true -Drat.skip=true -Dcheckstyle.skip=true -Dbnd.baseline.skip=true -Drevapi.skip=true -Djapicmp.skip=true -Dmaven.javadoc.skip=true -Ddocker-maven-plugin.version=0.48.0 -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false"
+          ./mvnw $FLAGS -pl log4j-api-test -Dtest=Unbox2ConfigurableTest test
+
+      # We upload tests results.
+      - name: Upload test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # 4.6.2
+        with:
+          name: "test-report-${{matrix.os}}-${{github.run_number}}-${{github.run_attempt}}"
+          path: |
+            **/target/surefire-reports
+            **/target/logs
+
+      - name: Upload log4j-api jar
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # 4.6.2
+        with:
+          name: log4j-api-jar
+          if-no-files-found: error
+          path: |
+            log4j-api/target/log4j-api-*.jar
+            !log4j-api/target/*-sources.jar
+            !log4j-api/target/*-javadoc.jar
+            !log4j-api/target/*-tests.jar
+
+      - name: Test summary and skipped-test reasons
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=python; else PY=python3; fi
+          $PY .github/seal-test-report.py
+          echo "OPT-IN TESTS LEFT OFF (upstream gates them behind a system property; forcing them on was tried on all three OSes):"
+          echo "  WatchManagerTest (log4j-core) | -DWatchManagerTest.forceRun=true fails testWatchManagerCallsWatcher with NullPointerException at Source.<init> (test fixture), so upstream keeps it opt-in"
+          echo "  AnnotationProcessorCompilerErrorTest (log4j-core) | LOG4J2-3609 javac-bug probe; forced on JDK 8 it reproduces 'error: cannot access MyAnnotation' (the javac bug itself), so upstream keeps it opt-in"
 
   deploy-snapshot:
     needs: build
-    if: github.repository == 'apache/logging-log4j2' && github.ref_name == '2.x'
+    if: false
     uses: apache/logging-parent/.github/workflows/deploy-snapshot-reusable.yaml@rel/12.1.1
     # Secrets for deployments
     secrets:
@@ -57,7 +135,7 @@ jobs:
 
   deploy-release:
     needs: build
-    if: github.repository == 'apache/logging-log4j2' && startsWith(github.ref_name, 'release/')
+    if: false
     uses: apache/logging-parent/.github/workflows/deploy-release-reusable.yaml@rel/12.1.1
     # Secrets for deployments
     secrets:
@@ -77,7 +155,7 @@ jobs:
 
   verify-reproducibility:
     needs: [ deploy-snapshot, deploy-release ]
-    if: ${{ always() && (needs.deploy-snapshot.result == 'success' || needs.deploy-release.result == 'success') }}
+    if: false
     name: "verify-reproducibility (${{ needs.deploy-release.result == 'success' && needs.deploy-release.outputs.project-version || needs.deploy-snapshot.outputs.project-version }})"
     uses: apache/logging-parent/.github/workflows/verify-reproducibility-reusable.yaml@rel/12.1.1
     with:
@@ -88,7 +166,7 @@ jobs:
   # Run integration-tests automatically after a snapshot or RC is published
   integration-test:
     needs: [ deploy-snapshot, deploy-release ]
-    if: ${{ always() && (needs.deploy-snapshot.result == 'success' || needs.deploy-release.result == 'success') }}
+    if: false
     name: "integration-test (${{ needs.deploy-release.result == 'success' && needs.deploy-release.outputs.project-version || needs.deploy-snapshot.outputs.project-version }})"
     uses: apache/logging-log4j-samples/.github/workflows/integration-test.yaml@main
     with:

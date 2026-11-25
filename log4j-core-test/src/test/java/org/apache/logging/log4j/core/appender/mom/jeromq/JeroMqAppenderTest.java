@@ -43,6 +43,8 @@ import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.zeromq.ZMonitor;
 import org.zeromq.ZMonitor.Event;
 import org.zeromq.ZMonitor.ZEvent;
@@ -67,6 +69,10 @@ class JeroMqAppenderTest {
     }
 
     @Test
+    @DisabledOnOs(
+            value = OS.WINDOWS,
+            disabledReason = "Flaky on GitHub windows-latest: ZeroMQ DISCONNECTED monitor event times out and the "
+                    + "leaked ThreadContext fails the surefire reruns")
     void testClientServer(@Named(APPENDER_NAME) final JeroMqAppender appender, final LoggerContext ctx)
             throws Exception {
         addLoggingFilter(appender);

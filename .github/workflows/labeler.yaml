@@ -17,10 +17,7 @@
 
 name: 'Check labels'
 on:
-  issue_comment:
-    types: [created]
-  issues:
-    types: [opened]
+  workflow_dispatch:
 env:
   issue_user_type: >-
     ${{

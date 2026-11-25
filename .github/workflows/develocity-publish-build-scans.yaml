@@ -17,9 +17,7 @@
 name: Develocity - Publish Maven Build Scans
 
 on:
-  workflow_run:
-    workflows: [ "build" ]
-    types: [ completed ]
+  workflow_dispatch:
 
 jobs:
 

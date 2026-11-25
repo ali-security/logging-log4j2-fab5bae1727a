@@ -18,14 +18,7 @@
 name: deploy-site
 
 on:
-  push:
-    branches:
-      - "2.x"
-      - "2.x-site-pro"
-      - "release/2*"
-    paths-ignore:
-      - "**.md"
-      - "**.txt"
+  workflow_dispatch:
 
 permissions: read-all
 
